@@ -1,18 +1,29 @@
 """
 Stock Data Service
 ==================
-Fetches Vietnamese stock market data using vnstock3 (primary)
-and yfinance (fallback). When both fail, returns realistic
-simulated data so every endpoint works offline.
+Fetches Vietnamese stock market data with the following priority:
+  1. DNSE / Entrade public API (no auth required)
+  2. vnstock3
+  3. yfinance
+  4. Simulated data (always succeeds – keeps every endpoint functional offline)
 """
 
 import hashlib
+import logging
 import random
 from datetime import datetime, timedelta
 from typing import Any
 
+import httpx
 import pandas as pd
 from cachetools import TTLCache
+
+logger = logging.getLogger("securities.stock_data")
+
+# ---------------------------------------------------------------------------
+# DNSE / Entrade base URL
+# ---------------------------------------------------------------------------
+DNSE_BASE_URL = "https://services.entrade.com.vn"
 
 # ---------------------------------------------------------------------------
 # Cache setup  (5-minute TTL, max 256 entries)
@@ -183,6 +194,148 @@ def _period_to_days(period: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# DNSE / Entrade helpers
+# ---------------------------------------------------------------------------
+
+def _fetch_dnse_history(symbol: str, days: int) -> list[dict]:
+    """
+    Fetch OHLCV history from DNSE (Entrade) chart API.
+
+    Prices returned by DNSE are in units of 1 000 VND (e.g. 72.5 = 72 500 VND).
+    We multiply every price field by 1 000 before returning so the rest of the
+    app always works in raw VND units.
+
+    Returns an empty list on any error so callers can fall through gracefully.
+    """
+    now = datetime.now()
+    ts_to   = int(now.timestamp())
+    ts_from = int((now - timedelta(days=days)).timestamp())
+
+    url = (
+        f"{DNSE_BASE_URL}/chart-api/v2/ohlcs/stock"
+        f"?from={ts_from}&to={ts_to}&symbol={symbol}&resolution=1D"
+    )
+
+    with httpx.Client(timeout=10) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+
+    data = resp.json()
+    timestamps: list = data.get("t", [])
+    opens:      list = data.get("o", [])
+    highs:      list = data.get("h", [])
+    lows:       list = data.get("l", [])
+    closes:     list = data.get("c", [])
+    volumes:    list = data.get("v", [])
+
+    if not timestamps:
+        return []
+
+    records = []
+    for i, ts in enumerate(timestamps):
+        date_str = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+        records.append({
+            "time":   date_str,
+            "open":   float(opens[i])   * 1000,
+            "high":   float(highs[i])   * 1000,
+            "low":    float(lows[i])    * 1000,
+            "close":  float(closes[i])  * 1000,
+            "volume": int(volumes[i]),
+        })
+
+    logger.debug("DNSE history: %s → %d candles", symbol, len(records))
+    return records
+
+
+def _fetch_dnse_index(symbol: str, days: int = 2) -> dict | None:
+    """
+    Fetch the latest OHLCV bar for a market index (VNINDEX / HNXINDEX).
+
+    Index values from DNSE are in raw points (not 1 000-unit), so no scaling.
+    Returns None on any error.
+    """
+    now = datetime.now()
+    ts_to   = int(now.timestamp())
+    ts_from = int((now - timedelta(days=days)).timestamp())
+
+    url = (
+        f"{DNSE_BASE_URL}/chart-api/v2/ohlcs/index"
+        f"?from={ts_from}&to={ts_to}&symbol={symbol}&resolution=1D"
+    )
+
+    with httpx.Client(timeout=10) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+
+    data = resp.json()
+    timestamps: list = data.get("t", [])
+    closes:     list = data.get("c", [])
+    opens:      list = data.get("o", [])
+    volumes:    list = data.get("v", [])
+
+    if not timestamps:
+        return None
+
+    last_idx = len(timestamps) - 1
+    close = float(closes[last_idx])
+    open_ = float(opens[last_idx])
+    change = close - open_
+    change_pct = change / open_ * 100 if open_ else 0.0
+
+    return {
+        "value":      round(close, 2),
+        "change":     round(change, 2),
+        "change_pct": round(change_pct, 2),
+        "volume":     int(volumes[last_idx]),
+    }
+
+
+def _fetch_dnse_market_overview() -> dict | None:
+    """
+    Fetch VNINDEX and HNXINDEX from DNSE and return the market overview dict.
+
+    DNSE uses "VNINDEX" for VN-Index but "HNX" (not "HNXINDEX") for HNX-Index.
+    Returns None if either index fetch fails.
+    """
+    vnindex  = _fetch_dnse_index("VNINDEX", days=5)
+    hnxindex = _fetch_dnse_index("HNX",     days=5)
+
+    if not vnindex or not hnxindex:
+        return None
+
+    return {
+        "vnindex":    vnindex,
+        "hnxindex":   hnxindex,
+        "updated_at": datetime.now().isoformat(),
+    }
+
+
+def _fetch_dnse_stock_prices(symbols: list[str]) -> dict[str, float]:
+    """
+    Fetch the most-recent closing price (in VND) for each symbol via DNSE.
+
+    We fetch the last 5 trading days per symbol and return the last close.
+    Results are cached under 'dnse_price:<SYMBOL>' so repeated calls within
+    the TTL window are free.  Returns only the symbols that succeeded.
+    """
+    prices: dict[str, float] = {}
+    for sym in symbols:
+        cache_key = f"dnse_price:{sym}"
+        if cache_key in _cache:
+            prices[sym] = _cache[cache_key]
+            continue
+        try:
+            records = _fetch_dnse_history(sym, days=7)
+            if records:
+                last_close = records[-1]["close"]
+                _cache[cache_key] = last_close
+                prices[sym] = last_close
+        except Exception as exc:
+            logger.debug("DNSE price fetch failed for %s: %s", sym, exc)
+    return prices
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -192,6 +345,7 @@ def get_stock_list() -> list[dict]:
     if cache_key in _cache:
         return _cache[cache_key]
 
+    # Build base result with simulated prices first (always succeeds)
     result = []
     for stock in VN_STOCKS:
         sym = stock["symbol"]
@@ -211,6 +365,23 @@ def get_stock_list() -> list[dict]:
             "volume":     int(rng.gauss(1_500_000, 600_000)),
         })
 
+    # --- Try DNSE real prices ---
+    try:
+        symbols = [s["symbol"] for s in VN_STOCKS]
+        real_prices = _fetch_dnse_stock_prices(symbols)
+        if real_prices:
+            for item in result:
+                sym = item["symbol"]
+                if sym in real_prices:
+                    real_price = real_prices[sym]
+                    sim_price  = item["price"]
+                    item["price"]      = real_price
+                    item["change"]     = round(real_price - sim_price, -1)
+                    item["change_pct"] = round((real_price - sim_price) / sim_price * 100, 2) if sim_price else 0.0
+            logger.info("DNSE prices applied to stock list (%d/%d)", len(real_prices), len(symbols))
+    except Exception as exc:
+        logger.warning("DNSE stock-list price fetch failed: %s", exc)
+
     _cache[cache_key] = result
     return result
 
@@ -218,7 +389,7 @@ def get_stock_list() -> list[dict]:
 def get_stock_history(symbol: str, period: str = "1y") -> list[dict]:
     """
     Return historical OHLCV data for a symbol.
-    Tries vnstock3 first, then yfinance, then falls back to simulation.
+    Priority: DNSE → vnstock3 → yfinance → simulation.
     """
     cache_key = f"history:{symbol}:{period}"
     if cache_key in _cache:
@@ -226,8 +397,18 @@ def get_stock_history(symbol: str, period: str = "1y") -> list[dict]:
 
     symbol = symbol.upper()
     days = _period_to_days(period)
-    end_date = datetime.now().strftime("%Y-%m-%d")
+    end_date   = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # --- Try DNSE (Entrade) ---
+    try:
+        records = _fetch_dnse_history(symbol, days)
+        if records:
+            logger.info("DNSE history: %s (%s) → %d records", symbol, period, len(records))
+            _cache[cache_key] = records
+            return records
+    except Exception as exc:
+        logger.debug("DNSE history failed for %s: %s", symbol, exc)
 
     # --- Try vnstock3 ---
     try:
@@ -279,23 +460,36 @@ def get_stock_info(symbol: str) -> dict:
 
     price_info: dict = {}
 
-    # --- Try vnstock3 ---
+    # --- Try DNSE (latest close from last 5 days of history) ---
     try:
-        from vnstock3 import Vnstock  # noqa: PLC0415
-        vs = Vnstock().stock(symbol=symbol, source="VCI")
-        cmp = vs.trading.price_board(symbols_list=[symbol])
-        if cmp is not None and not cmp.empty:
-            row = cmp.iloc[0]
-            price_info["price"] = float(row.get("close", row.get("match_price", 0)))
-            price_info["market_cap"] = float(row.get("market_cap", 0))
-    except Exception:
-        pass
+        records = _fetch_dnse_history(symbol, days=7)
+        if records:
+            last_close = records[-1]["close"]
+            price_info["price"] = last_close
+            logger.info("DNSE info price: %s → %.0f VND", symbol, last_close)
+    except Exception as exc:
+        logger.debug("DNSE info price failed for %s: %s", symbol, exc)
+
+    # --- Try vnstock3 (if DNSE didn't give us a price) ---
+    if not price_info:
+        try:
+            from vnstock3 import Vnstock  # noqa: PLC0415
+            vs = Vnstock().stock(symbol=symbol, source="VCI")
+            cmp = vs.trading.price_board(symbols_list=[symbol])
+            if cmp is not None and not cmp.empty:
+                row = cmp.iloc[0]
+                price_info["price"] = float(row.get("close", row.get("match_price", 0)))
+                price_info["market_cap"] = float(row.get("market_cap", 0))
+        except Exception:
+            pass
 
     if not price_info:
         # Derive from simulated history
         hist = get_stock_history(symbol, period="5d")
         last = hist[-1] if hist else {}
         price_info["price"] = last.get("close", _BASE_PRICES.get(symbol, 30000))
+
+    if "market_cap" not in price_info:
         rng = random.Random(_seed_for(symbol))
         shares = rng.randint(300_000_000, 5_000_000_000)
         price_info["market_cap"] = price_info["price"] * shares
@@ -315,7 +509,21 @@ def get_market_overview() -> dict:
     if cache_key in _cache:
         return _cache[cache_key]
 
-    # Try vnstock3 market indices
+    # --- Try DNSE (Entrade) ---
+    try:
+        result = _fetch_dnse_market_overview()
+        if result:
+            logger.info(
+                "DNSE market overview: VNINDEX=%.2f HNXINDEX=%.2f",
+                result["vnindex"]["value"],
+                result["hnxindex"]["value"],
+            )
+            _cache[cache_key] = result
+            return result
+    except Exception as exc:
+        logger.debug("DNSE market overview failed: %s", exc)
+
+    # --- Try vnstock3 market indices ---
     try:
         from vnstock3 import Vnstock  # noqa: PLC0415
         vs = Vnstock()
