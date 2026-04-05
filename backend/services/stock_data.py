@@ -374,10 +374,21 @@ def get_stock_list() -> list[dict]:
                 sym = item["symbol"]
                 if sym in real_prices:
                     real_price = real_prices[sym]
-                    sim_price  = item["price"]
+                    # Fetch previous close from DNSE 7-day history for accurate change
+                    prev_close = real_price  # fallback
+                    try:
+                        hist = _fetch_dnse_history(sym, 7)
+                        if hist and len(hist) >= 2:
+                            prev_close = hist[-2]["close"]
+                        elif hist and len(hist) == 1:
+                            prev_close = hist[0]["open"]
+                    except Exception:
+                        pass
+                    change = round(real_price - prev_close, -1)
+                    change_pct = round((real_price - prev_close) / prev_close * 100, 2) if prev_close else 0.0
                     item["price"]      = real_price
-                    item["change"]     = round(real_price - sim_price, -1)
-                    item["change_pct"] = round((real_price - sim_price) / sim_price * 100, 2) if sim_price else 0.0
+                    item["change"]     = change
+                    item["change_pct"] = change_pct
             logger.info("DNSE prices applied to stock list (%d/%d)", len(real_prices), len(symbols))
     except Exception as exc:
         logger.warning("DNSE stock-list price fetch failed: %s", exc)
