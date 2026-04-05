@@ -1,0 +1,16 @@
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.env
+.env.local
+backend/data/cache/*
+!backend/data/cache/.gitkeep
+*.h5
+*.pkl
+.DS_Store
+dist/
+build/
+*.egg-info/
+venv/
+.venv/
