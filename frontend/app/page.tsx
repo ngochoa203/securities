@@ -70,13 +70,19 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    Promise.all([fetchStocks(), fetchRankings('top-buy')]).then(
-      ([stocksData, rankData]) => {
-        if (stocksData) setStocks(stocksData);
-        if (rankData) setTopBuy(rankData.slice(0, 3));
-        setLoading(false);
-      }
-    );
+    const load = () => {
+      Promise.all([fetchStocks(), fetchRankings('top-buy')]).then(
+        ([stocksData, rankData]) => {
+          if (stocksData) setStocks(stocksData);
+          if (rankData) setTopBuy(rankData.slice(0, 3));
+          setLoading(false);
+        }
+      );
+    };
+    load();
+    // Auto-refresh every 5 minutes
+    const interval = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   const topGainers = [...stocks].sort((a, b) => b.change_pct - a.change_pct).slice(0, 3);

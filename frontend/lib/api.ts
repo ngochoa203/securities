@@ -118,11 +118,37 @@ async function get<T>(path: string): Promise<T | null> {
   }
 }
 
+/** Client-side fetch with no caching — for realtime data */
+async function getClient<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 // ── API Functions ──────────────────────────────────────────────────────────
 
 export async function fetchStocks(): Promise<StockSummary[] | null> {
-  const data = await get<{ stocks: StockSummary[] }>('/api/stocks');
+  const data = await getClient<{ stocks: StockSummary[] }>('/api/stocks');
   return data?.stocks ?? null;
+}
+
+export interface RealtimePrice {
+  price: number;
+  change: number;
+  change_pct: number;
+  volume: number;
+  time: string;
+}
+
+/** Fetch near-realtime prices (60s cache on backend) */
+export async function fetchRealtimePrices(symbols?: string[]): Promise<Record<string, RealtimePrice> | null> {
+  const query = symbols?.length ? `?symbols=${symbols.join(',')}` : '';
+  const data = await getClient<{ prices: Record<string, RealtimePrice> }>(`/api/stocks/prices${query}`);
+  return data?.prices ?? null;
 }
 
 export async function fetchStock(symbol: string): Promise<StockDetail | null> {

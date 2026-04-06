@@ -26,10 +26,15 @@ export default function StockTicker() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetchStocks().then((data) => {
-      if (data) setStocks(data.slice(0, 20));
-      setLoading(false);
-    });
+    const load = () => {
+      fetchStocks().then((data) => {
+        if (data) setStocks(data.slice(0, 20));
+        setLoading(false);
+      });
+    };
+    load();
+    const interval = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) {

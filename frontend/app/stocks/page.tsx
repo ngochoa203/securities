@@ -1,13 +1,15 @@
 'use client';
 
-import { useState, useEffect, useMemo, Suspense } from 'react';
+import { useState, useEffect, useMemo, useCallback, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Search, TrendingUp, TrendingDown, ChevronUp, ChevronDown, Eye } from 'lucide-react';
+import { Search, TrendingUp, TrendingDown, ChevronUp, ChevronDown, Eye, RefreshCw } from 'lucide-react';
 import { fetchStocks, StockSummary } from '@/lib/api';
 
 type SortKey = 'symbol' | 'name' | 'price' | 'change_pct' | 'volume';
 type SortDir = 'asc' | 'desc';
+
+const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 function StocksContent() {
   const searchParams = useSearchParams();
@@ -16,13 +18,26 @@ function StocksContent() {
   const [query, setQuery] = useState(searchParams.get('q') || '');
   const [sortKey, setSortKey] = useState<SortKey>('symbol');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadStocks = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    const data = await fetchStocks();
+    if (data) {
+      setStocks(data);
+      setLastUpdate(new Date());
+    }
+    setLoading(false);
+    setRefreshing(false);
+  }, []);
 
   useEffect(() => {
-    fetchStocks().then((data) => {
-      if (data) setStocks(data);
-      setLoading(false);
-    });
-  }, []);
+    loadStocks();
+    // Auto-refresh every 5 minutes
+    const interval = setInterval(() => loadStocks(true), REFRESH_INTERVAL);
+    return () => clearInterval(interval);
+  }, [loadStocks]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -76,9 +91,24 @@ function StocksContent() {
       {/* Header */}
       <div className="mb-6">
         <h1 className={`text-2xl font-bold ${textP} mb-1`}>Danh sách cổ phiếu</h1>
-        <p className={`text-sm ${textS}`}>
-          {loading ? 'Đang tải...' : `${stocks.length} cổ phiếu · ${filtered.length} kết quả`}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className={`text-sm ${textS}`}>
+            {loading ? 'Đang tải...' : `${stocks.length} cổ phiếu · ${filtered.length} kết quả`}
+          </p>
+          {lastUpdate && (
+            <span className={`text-xs ${textS} opacity-60`}>
+              · Cập nhật: {lastUpdate.toLocaleTimeString('vi-VN')}
+            </span>
+          )}
+          <button
+            onClick={() => loadStocks(true)}
+            disabled={refreshing}
+            className={`ml-2 p-1.5 rounded-lg text-sm transition-colors ${refreshing ? 'opacity-50' : 'hover:bg-gray-700'} ${textS}`}
+            title="Làm mới giá (tự động mỗi 5 phút)"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {/* Search */}

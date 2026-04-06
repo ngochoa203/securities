@@ -29,6 +29,7 @@ DNSE_BASE_URL = "https://services.entrade.com.vn"
 # Cache setup  (5-minute TTL, max 256 entries)
 # ---------------------------------------------------------------------------
 _cache: TTLCache = TTLCache(maxsize=256, ttl=300)
+_price_cache: TTLCache = TTLCache(maxsize=100, ttl=60)  # 60s cache for realtime prices
 
 # ---------------------------------------------------------------------------
 # Top 50 Vietnamese stocks – symbol, name, exchange, sector
@@ -247,6 +248,98 @@ def _fetch_dnse_history(symbol: str, days: int) -> list[dict]:
     return records
 
 
+def _fetch_dnse_realtime_price(symbol: str) -> dict | None:
+    """
+    Fetch the latest price for a symbol using short-interval DNSE data.
+
+    During market hours: uses 5-minute resolution for near-realtime prices.
+    Outside market hours: uses 1D resolution for last close.
+
+    Returns: {"price": float, "change": float, "change_pct": float, "volume": int, "time": str}
+    or None on error.
+
+    Cached for 60 seconds in _price_cache.
+    """
+    cache_key = f"rt_price:{symbol}"
+    if cache_key in _price_cache:
+        return _price_cache[cache_key]
+
+    now = datetime.now()
+
+    # Try 5-minute resolution first (works during market hours)
+    for resolution in ["5", "1D"]:
+        try:
+            if resolution == "5":
+                ts_from = int((now - timedelta(hours=2)).timestamp())
+            else:
+                ts_from = int((now - timedelta(days=5)).timestamp())
+            ts_to = int(now.timestamp())
+
+            url = (
+                f"{DNSE_BASE_URL}/chart-api/v2/ohlcs/stock"
+                f"?from={ts_from}&to={ts_to}&symbol={symbol}&resolution={resolution}"
+            )
+
+            with httpx.Client(timeout=8) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+
+            data = resp.json()
+            timestamps = data.get("t", [])
+            closes = data.get("c", [])
+            opens = data.get("o", [])
+            volumes = data.get("v", [])
+
+            if not timestamps or not closes:
+                continue
+
+            current_price = float(closes[-1]) * 1000
+            current_volume = int(volumes[-1]) if volumes else 0
+            time_str = datetime.utcfromtimestamp(timestamps[-1]).strftime("%Y-%m-%d %H:%M")
+
+            # Calculate change from previous bar
+            if len(closes) >= 2:
+                prev_price = float(closes[-2]) * 1000
+            elif resolution == "5":
+                # For intraday, use today's open
+                prev_price = float(opens[0]) * 1000 if opens else current_price
+            else:
+                prev_price = current_price
+
+            change = round(current_price - prev_price, -1)
+            change_pct = round((change / prev_price * 100) if prev_price else 0, 2)
+
+            result = {
+                "price": current_price,
+                "change": change,
+                "change_pct": change_pct,
+                "volume": current_volume,
+                "time": time_str,
+                "resolution": resolution,
+            }
+            _price_cache[cache_key] = result
+            return result
+
+        except Exception:
+            continue
+
+    return None
+
+
+def get_realtime_prices(symbols: list[str]) -> dict[str, dict]:
+    """
+    Fetch realtime prices for multiple symbols.
+    Returns: {symbol: {price, change, change_pct, volume, time}}
+    """
+    result = {}
+    for sym in symbols:
+        sym = sym.upper()
+        data = _fetch_dnse_realtime_price(sym)
+        if data:
+            result[sym] = data
+    return result
+
+
 def _fetch_dnse_index(symbol: str, days: int = 2) -> dict | None:
     """
     Fetch the latest OHLCV bar for a market index (VNINDEX / HNXINDEX).
@@ -340,10 +433,13 @@ def _fetch_dnse_stock_prices(symbols: list[str]) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 def get_stock_list() -> list[dict]:
-    """Return list of popular Vietnamese stocks with basic info."""
+    """Return list of popular Vietnamese stocks with basic info.
+    Uses realtime prices during market hours (60s cache), daily prices otherwise (5min cache).
+    """
     cache_key = "stock_list"
-    if cache_key in _cache:
-        return _cache[cache_key]
+    # Use shorter cache (60s) for stock list during potential market hours
+    if cache_key in _price_cache:
+        return _price_cache[cache_key]
 
     # Build base result with simulated prices first (always succeeds)
     result = []
@@ -393,7 +489,7 @@ def get_stock_list() -> list[dict]:
     except Exception as exc:
         logger.warning("DNSE stock-list price fetch failed: %s", exc)
 
-    _cache[cache_key] = result
+    _price_cache[cache_key] = result
     return result
 
 

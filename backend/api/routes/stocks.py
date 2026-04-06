@@ -2,6 +2,7 @@
 Stock Routes
 ============
 GET /api/stocks            – List all available stocks
+GET /api/stocks/prices     – Realtime prices (60s cache)
 GET /api/stocks/{symbol}   – Stock detail with recent history
 GET /api/stocks/{symbol}/predict   – AI ensemble prediction
 GET /api/stocks/{symbol}/technical – Technical indicators + signal
@@ -19,6 +20,7 @@ from services.stock_data import (
     get_stock_history,
     get_stock_info,
     get_market_overview,
+    get_realtime_prices,
 )
 from services.technical import calculate_all_indicators, generate_signal
 from models.ensemble import EnsemblePredictor
@@ -54,6 +56,33 @@ async def list_stocks(
         "total":   len(stocks),
         "stocks":  stocks,
         "market":  market,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/stocks/prices — Realtime prices (60s cache)
+# ---------------------------------------------------------------------------
+
+@router.get("/prices", summary="Realtime prices for all or specific stocks")
+async def get_prices(
+    symbols: str | None = Query(default=None, description="Comma-separated symbols, e.g. VCB,MBB,FPT. Empty=all watchlist stocks"),
+) -> dict[str, Any]:
+    """
+    Fetch near-realtime prices from DNSE.
+    During market hours: uses 5-minute resolution (updated every 60s).
+    Outside market hours: returns last closing price.
+    """
+    if symbols:
+        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    else:
+        sym_list = [s["symbol"] for s in VN_STOCKS]
+
+    prices = get_realtime_prices(sym_list)
+
+    return {
+        "prices": prices,
+        "count": len(prices),
+        "cached_ttl": 60,
     }
 
 

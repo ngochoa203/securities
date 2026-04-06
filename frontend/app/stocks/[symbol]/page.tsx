@@ -74,7 +74,11 @@ export default function StockDetailPage() {
     });
   };
 
-  useEffect(() => { load(); }, [symbol]);
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [symbol]);
 
   if (loading) return (
     <div className="max-w-7xl mx-auto px-4 py-8"><LoadingSpinner /></div>
