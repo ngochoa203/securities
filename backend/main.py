@@ -13,6 +13,9 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,14 +31,14 @@ logger = logging.getLogger("securities.main")
 
 
 # ---------------------------------------------------------------------------
-# Lifespan: pre-warm caches on startup
+# Lifespan: pre-warm caches on startup, start/stop poller
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Pre-warm the data caches so the first request is fast.
-    Runs in the background after startup.
+    Start the realtime price poller on startup and stop it on shutdown.
     """
     logger.info("🚀 Warming up caches…")
     try:
@@ -45,7 +48,24 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Cache warm-up complete.")
     except Exception as exc:
         logger.warning("⚠️  Cache warm-up failed (non-critical): %s", exc)
+
+    # Start realtime poller
+    logger.info("🔄 Starting realtime price poller…")
+    try:
+        from services.realtime_poller import start_poller  # noqa: PLC0415
+        await start_poller()
+    except Exception as exc:
+        logger.warning("⚠️  Realtime poller failed to start (non-critical): %s", exc)
+
     yield
+
+    # Stop poller on shutdown
+    logger.info("🛑 Stopping realtime poller…")
+    try:
+        from services.realtime_poller import stop_poller  # noqa: PLC0415
+        await stop_poller()
+    except Exception as exc:
+        logger.warning("⚠️  Error stopping poller: %s", exc)
     logger.info("🛑 Application shutdown.")
 
 
@@ -88,13 +108,17 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 
-from api.routes.stocks   import router as stocks_router    # noqa: E402
-from api.routes.rankings import router as rankings_router  # noqa: E402
-from api.routes.guide    import router as guide_router     # noqa: E402
+from api.routes.stocks     import router as stocks_router      # noqa: E402
+from api.routes.rankings   import router as rankings_router    # noqa: E402
+from api.routes.guide      import router as guide_router       # noqa: E402
+from api.routes.watchlist  import router as watchlist_router, alerts_router, poller_router  # noqa: E402
 
 app.include_router(stocks_router)
 app.include_router(rankings_router)
 app.include_router(guide_router)
+app.include_router(watchlist_router)
+app.include_router(alerts_router)
+app.include_router(poller_router)
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +135,13 @@ async def root():
         "message": "Vietnam Securities AI API is running",
         "version": "1.0.0",
         "endpoints": {
-            "stocks":   "/api/stocks",
-            "rankings": "/api/rankings",
-            "guide":    "/api/guide",
-            "docs":     "/docs",
+            "stocks":    "/api/stocks",
+            "rankings":  "/api/rankings",
+            "guide":     "/api/guide",
+            "watchlist": "/api/watchlist",
+            "alerts":    "/api/alerts",
+            "poller":    "/api/poller",
+            "docs":      "/docs",
         },
     }
 

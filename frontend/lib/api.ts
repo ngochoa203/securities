@@ -148,3 +148,92 @@ export async function fetchGuide(): Promise<GuideSection[] | null> {
   const data = await get<{ sections: GuideSection[] }>('/api/guide');
   return data?.sections ?? null;
 }
+
+// ── Watchlist Types ────────────────────────────────────────────────────────
+
+export interface WatchlistItem {
+  symbol: string;
+  target_low: number;
+  target_high: number;
+  current_price?: number;
+  name?: string;
+  change_pct?: number;
+}
+
+export interface AlertItem {
+  type: string;
+  symbol: string;
+  message: string;
+  data: Record<string, unknown>;
+  timestamp: string;
+}
+
+export interface PollerStatus {
+  running: boolean;
+  market_hours: boolean;
+  last_poll_time: string | null;
+  watchlist_count: number;
+  discord_configured: boolean;
+}
+
+// ── Watchlist API ──────────────────────────────────────────────────────────
+
+export async function fetchWatchlist(): Promise<WatchlistItem[] | null> {
+  const data = await get<{ watchlist: WatchlistItem[] }>('/api/watchlist');
+  return data?.watchlist ?? null;
+}
+
+export async function addToWatchlist(
+  symbol: string,
+  targetLow: number = 0,
+  targetHigh: number = 0,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/watchlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol: symbol.toUpperCase(),
+        target_low: targetLow,
+        target_high: targetHigh,
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function removeFromWatchlist(symbol: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/watchlist/${encodeURIComponent(symbol)}`,
+      { method: 'DELETE' },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchAlertHistory(
+  limit: number = 50,
+): Promise<AlertItem[] | null> {
+  const data = await get<{ alerts: AlertItem[] }>(
+    `/api/alerts/history?limit=${limit}`,
+  );
+  return data?.alerts ?? null;
+}
+
+export async function testDiscordAlert(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/alerts/test`, { method: 'POST' });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchPollerStatus(): Promise<PollerStatus | null> {
+  return get<PollerStatus>('/api/poller/status');
+}

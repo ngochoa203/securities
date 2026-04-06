@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import type { LucideIcon } from 'lucide-react';
 import {
   TrendingUp,
   Sun,
@@ -10,13 +11,21 @@ import {
   Menu,
   X,
   BarChart2,
+  Bell,
 } from 'lucide-react';
 
-const navLinks = [
+interface NavLink {
+  href: string;
+  label: string;
+  icon?: LucideIcon;
+}
+
+const navLinks: NavLink[] = [
   { href: '/', label: 'Trang chủ' },
   { href: '/stocks', label: 'Cổ phiếu' },
   { href: '/predictions', label: 'Dự đoán AI' },
   { href: '/rankings', label: 'Xếp hạng' },
+  { href: '/watchlist', label: 'Theo dõi', icon: Bell },
   { href: '/guide', label: 'Hướng dẫn' },
 ];
 
@@ -67,14 +76,14 @@ export default function Navbar({ darkMode, toggleDark }: NavbarProps) {
 
           {/* Desktop Nav */}
           <div className="hidden md:flex items-center gap-1">
-            {navLinks.map(({ href, label }) => {
+            {navLinks.map(({ href, label, icon: Icon }) => {
               const active =
                 href === '/' ? pathname === '/' : pathname.startsWith(href);
               return (
                 <Link
                   key={href}
                   href={href}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                     active
                       ? 'bg-emerald-500/10 text-emerald-500'
                       : darkMode
@@ -82,6 +91,7 @@ export default function Navbar({ darkMode, toggleDark }: NavbarProps) {
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                   }`}
                 >
+                  {Icon && <Icon className="w-3.5 h-3.5" />}
                   {label}
                 </Link>
               );
@@ -127,7 +137,7 @@ export default function Navbar({ darkMode, toggleDark }: NavbarProps) {
           }`}
         >
           <div className="px-4 py-3 space-y-1">
-            {navLinks.map(({ href, label }) => {
+            {navLinks.map(({ href, label, icon: Icon }) => {
               const active =
                 href === '/' ? pathname === '/' : pathname.startsWith(href);
               return (
@@ -143,7 +153,11 @@ export default function Navbar({ darkMode, toggleDark }: NavbarProps) {
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                   }`}
                 >
-                  <TrendingUp className="w-4 h-4 opacity-60" />
+                  {Icon ? (
+                    <Icon className="w-4 h-4 opacity-70" />
+                  ) : (
+                    <TrendingUp className="w-4 h-4 opacity-60" />
+                  )}
                   {label}
                 </Link>
               );
