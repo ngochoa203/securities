@@ -15,6 +15,7 @@ from services.realtime_poller import (
     get_alert_history,
     get_poller_status,
 )
+from services.stock_data import get_stock_info, get_realtime_prices
 from services import discord_notifier
 
 # ---------------------------------------------------------------------------
@@ -53,10 +54,36 @@ class WatchlistEntry(BaseModel):
 async def list_watchlist():
     """
     Trả về danh sách theo dõi hiện tại cùng với giá cổ phiếu mới nhất.
+    Nếu poller chưa cập nhật giá (ngoài giờ giao dịch), fetch trực tiếp từ DNSE.
     """
+    watchlist = get_watchlist()
+
+    # Collect symbols that don't have a price yet
+    missing = [w["symbol"] for w in watchlist if not w.get("current_price")]
+
+    if missing:
+        # Fetch live prices from DNSE for items without a cached price
+        prices = get_realtime_prices(missing)
+        for item in watchlist:
+            sym = item["symbol"]
+            if not item.get("current_price") and sym in prices:
+                p = prices[sym]
+                item["current_price"] = p["price"]
+                item["change_pct"] = p["change_pct"]
+                item["prev_close"] = round(p["price"] - p["change"], -1) if p.get("change") else None
+
+    # Also enrich with stock name
+    for item in watchlist:
+        if not item.get("name"):
+            try:
+                info = get_stock_info(item["symbol"])
+                item["name"] = info.get("name", item["symbol"])
+            except Exception:
+                item["name"] = item["symbol"]
+
     return {
-        "watchlist": get_watchlist(),
-        "count":     len(get_watchlist()),
+        "watchlist": watchlist,
+        "count":     len(watchlist),
     }
 
 
