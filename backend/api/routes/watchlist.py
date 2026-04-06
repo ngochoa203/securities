@@ -49,7 +49,7 @@ class WatchlistEntry(BaseModel):
 # Watchlist endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/", summary="Lấy danh sách theo dõi")
+@router.get("", summary="Lấy danh sách theo dõi")
 async def list_watchlist():
     """
     Trả về danh sách theo dõi hiện tại cùng với giá cổ phiếu mới nhất.
@@ -60,7 +60,7 @@ async def list_watchlist():
     }
 
 
-@router.post("/", summary="Thêm cổ phiếu vào danh sách theo dõi")
+@router.post("", summary="Thêm cổ phiếu vào danh sách theo dõi")
 async def add_watchlist_item(body: WatchlistAddRequest):
     """
     Thêm một mã cổ phiếu vào danh sách theo dõi.

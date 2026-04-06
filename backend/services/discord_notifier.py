@@ -338,3 +338,93 @@ async def send_test_notification() -> bool:
         "footer": {"text": "Securities AI | Kiểm tra hệ thống"},
     }
     return await send_webhook([embed])
+
+
+async def send_priority_stock_report(
+    symbol: str,
+    name: str,
+    price: float,
+    change: float,
+    change_pct: float,
+    prev_close: float,
+    high_30d: float,
+    low_30d: float,
+    rsi: float | None,
+    signal: str,
+    signal_confidence: float,
+    macd_status: str,
+    prediction_1d: float,
+    prediction_7d: float,
+    prediction_30d: float,
+    pred_direction: str,
+    pred_confidence: float,
+    reasons: list[str],
+) -> None:
+    """
+    Gửi báo cáo phân tích chi tiết ⭐ cho cổ phiếu ưu tiên (VCB, MBB).
+    Bao gồm: giá, kỹ thuật, dự đoán AI, hành động khuyến nghị.
+    Không áp dụng rate limit.
+    """
+    color = COLOR_GREEN if change_pct >= 0 else COLOR_RED
+    direction_emoji = "📈" if change_pct >= 0 else "📉"
+    pred_emoji = "🔼" if pred_direction == "up" else "🔽"
+
+    signal_emoji_map = {"Buy": "🟢 MUA", "Sell": "🔴 BÁN", "Hold": "🟡 GIỮ"}
+    signal_display = signal_emoji_map.get(signal, f"⚪ {signal}")
+
+    rsi_text = f"{rsi:.1f}" if rsi is not None else "N/A"
+    rsi_status = ""
+    if rsi is not None:
+        if rsi < 30:
+            rsi_status = " (Quá bán ⚡)"
+        elif rsi > 70:
+            rsi_status = " (Quá mua ⚠️)"
+        elif rsi < 45:
+            rsi_status = " (Vùng tích lũy)"
+        else:
+            rsi_status = " (Bình thường)"
+
+    reasons_text = "\n".join(f"• {r}" for r in reasons[:4]) if reasons else "Không có lý do cụ thể"
+
+    # Position in 30-day range (0% = at low, 100% = at high)
+    range_span = high_30d - low_30d if high_30d > low_30d else 1
+    range_pct = ((price - low_30d) / range_span) * 100
+    range_bar_len = 10
+    filled = int(range_pct / 100 * range_bar_len)
+    range_bar = "█" * filled + "░" * (range_bar_len - filled)
+
+    embed = {
+        "title": f"⭐ Báo cáo chi tiết: {symbol} — {name}",
+        "description": (
+            f"{direction_emoji} **{symbol}** đang giao dịch ở **{_fmt_price(price)}** "
+            f"({_fmt_pct(change_pct)} so với hôm qua)\n"
+            f"Đây là cổ phiếu bạn đang **theo dõi đặc biệt**."
+        ),
+        "color": color,
+        "fields": [
+            {"name": "💵 Giá hiện tại", "value": _fmt_price(price), "inline": True},
+            {"name": "📊 Thay đổi", "value": f"{_fmt_price(change)} ({_fmt_pct(change_pct)})", "inline": True},
+            {"name": "📍 Giá hôm qua", "value": _fmt_price(prev_close), "inline": True},
+
+            {"name": "📏 Biên độ 30 ngày", "value": f"{_fmt_price(low_30d)} — {_fmt_price(high_30d)}\n`[{range_bar}]` {range_pct:.0f}%", "inline": False},
+
+            {"name": "🎯 Tín hiệu kỹ thuật", "value": f"{signal_display}\nĐộ tin cậy: **{signal_confidence*100:.0f}%**", "inline": True},
+            {"name": "📉 RSI", "value": f"{rsi_text}{rsi_status}", "inline": True},
+            {"name": "📊 MACD", "value": macd_status, "inline": True},
+
+            {"name": f"{pred_emoji} Dự đoán AI", "value": (
+                f"1 ngày: **{_fmt_price(prediction_1d)}**\n"
+                f"7 ngày: **{_fmt_price(prediction_7d)}**\n"
+                f"30 ngày: **{_fmt_price(prediction_30d)}**\n"
+                f"Hướng: **{pred_direction.upper()}** ({pred_confidence*100:.0f}%)"
+            ), "inline": False},
+
+            {"name": "📋 Phân tích", "value": reasons_text, "inline": False},
+
+            {"name": "⚠️ Lưu ý", "value": "Đây không phải lời khuyên đầu tư. Hãy tự nghiên cứu thêm trước khi quyết định.", "inline": False},
+        ],
+        "timestamp": _now_iso(),
+        "footer": {"text": "Securities AI | Theo dõi đặc biệt | Dữ liệu DNSE"},
+    }
+
+    await send_webhook([embed])

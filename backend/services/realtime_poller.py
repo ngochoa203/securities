@@ -37,8 +37,15 @@ POLL_INTERVAL = 60  # seconds
 # Default top-10 most-traded VN stocks
 DEFAULT_WATCHLIST = ["FPT", "VNM", "VIC", "HPG", "TCB", "VCB", "MWG", "MBB", "ACB", "VPB"]
 
+# ── Priority stocks: lower alert threshold, more detailed Discord reports ──
+PRIORITY_STOCKS: dict[str, dict] = {
+    "VCB": {"name": "Vietcombank", "alert_threshold": 1.5, "track_intraday": True},
+    "MBB": {"name": "MB Bank",    "alert_threshold": 1.5, "track_intraday": True},
+}
+
 # Alert thresholds
-PRICE_ALERT_THRESHOLD  = 3.0   # % change from prev close to trigger alert
+PRICE_ALERT_THRESHOLD  = 3.0   # % change from prev close to trigger alert (normal stocks)
+PRIORITY_ALERT_THRESHOLD = 1.5 # % change for priority stocks (VCB, MBB)
 BUY_CONFIDENCE_THRESHOLD = 0.70  # min confidence for buy recommendation
 
 _MAX_ALERT_HISTORY = 200
@@ -190,20 +197,24 @@ def _get_stock_name(symbol: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def _check_price_alerts(symbol: str, current_price: float, prev_close: float) -> None:
-    """Send a price alert if the price moved more than PRICE_ALERT_THRESHOLD% from prev close."""
+    """Send a price alert if the price moved beyond the threshold.
+    Priority stocks (VCB, MBB) use a lower threshold (1.5%) for closer monitoring."""
     if prev_close <= 0:
         return
     change_pct = ((current_price - prev_close) / prev_close) * 100
-    if abs(change_pct) >= PRICE_ALERT_THRESHOLD:
+    threshold = PRIORITY_STOCKS[symbol]["alert_threshold"] if symbol in PRIORITY_STOCKS else PRICE_ALERT_THRESHOLD
+    if abs(change_pct) >= threshold:
         name = _get_stock_name(symbol)
+        is_priority = symbol in PRIORITY_STOCKS
+        priority_tag = " ⭐ THEO DÕI ĐẶC BIỆT" if is_priority else ""
         logger.info(
-            "Price alert for %s: %.2f%% change (%.0f -> %.0f)",
-            symbol, change_pct, prev_close, current_price,
+            "Price alert for %s%s: %.2f%% change (%.0f -> %.0f)",
+            symbol, priority_tag, change_pct, prev_close, current_price,
         )
         _add_alert(
             "price_alert", symbol,
-            f"{symbol} biến động {change_pct:+.2f}%",
-            {"price": current_price, "prev_close": prev_close, "change_pct": change_pct},
+            f"{symbol}{priority_tag} biến động {change_pct:+.2f}%",
+            {"price": current_price, "prev_close": prev_close, "change_pct": change_pct, "priority": is_priority},
         )
         await discord_notifier.send_price_alert(symbol, name, current_price, change_pct, prev_close)
 
